@@ -1,8 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO="windbloww/my-own-project"
-SCRIPT_PATH="cloudflare-ddns.sh"
+RAW_BASE="https://raw.githubusercontent.com/windbloww/my-own-project/main"
 INSTALL_DIR="$HOME/.local/bin"
 INSTALL_PATH="$INSTALL_DIR/cf-ddns"
 TMP="$(mktemp)"
@@ -37,25 +36,7 @@ install_deps() {
 }
 
 fetch_script() {
-  local here
-  here="$(cd -- "$(dirname -- "${BASH_SOURCE[0]:-$0}")" 2>/dev/null && pwd || true)"
-  if [[ -n "$here" && -f "$here/cloudflare-ddns.sh" ]]; then
-    cp "$here/cloudflare-ddns.sh" "$TMP"
-    return 0
-  fi
-
-  if ! command -v gh >/dev/null 2>&1; then
-    say "这个安装器来自 GitHub 私有仓库，需要 GitHub CLI (gh) 读取脚本。"
-    say "请先安装并登录 gh，然后重新执行一键命令："
-    say "  gh auth login"
-    exit 1
-  fi
-  if ! gh auth status >/dev/null 2>&1; then
-    say "GitHub CLI 尚未登录。请先执行：gh auth login"
-    exit 1
-  fi
-
-  gh api "repos/${REPO}/contents/${SCRIPT_PATH}" --jq '.content' | tr -d '\n' | base64 -d > "$TMP"
+  curl -fsSL "$RAW_BASE/cloudflare-ddns.sh" -o "$TMP"
 }
 
 main() {
