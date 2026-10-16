@@ -2,6 +2,14 @@
 
 一个尽量傻瓜化的 Cloudflare DDNS Bash 脚本，仅支持 **API Token**。
 
+## 一键安装
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/windbloww/my-own-project/main/install.sh | bash
+```
+
+首次运行会自动进入配置向导。以后无需 GitHub 登录。
+
 首次配置时只需要：
 
 1. 粘贴 Cloudflare API Token
@@ -36,24 +44,6 @@
 
 Token 创建后只显示一次，请复制保存。
 
-## 私有仓库一键安装
-
-因为仓库是 Private，GitHub 不允许匿名 `curl raw.githubusercontent.com/... | bash`。
-
-推荐在机器上安装并登录 GitHub CLI 一次：
-
-```bash
-gh auth login
-```
-
-之后安装命令只有一条：
-
-```bash
-gh api repos/windbloww/my-own-project/contents/install.sh --jq '.content' | tr -d '\n' | base64 -d | bash
-```
-
-安装器会自动下载主脚本、安装依赖并进入首次配置向导。
-
 ## 常用命令
 
 ```bash
@@ -69,4 +59,4 @@ gh api repos/windbloww/my-own-project/contents/install.sh --jq '.content' | tr -
 - 配置：`~/.config/cf-ddns/config.json`
 - 日志：`~/.local/state/cf-ddns/ddns.log`
 
-> 不要把 `~/.config/cf-ddns/config.json` 提交到 GitHub；其中包含 Cloudflare API Token。
+> Cloudflare API Token 不会上传到 GitHub。不要把 `~/.config/cf-ddns/config.json` 提交到仓库。
