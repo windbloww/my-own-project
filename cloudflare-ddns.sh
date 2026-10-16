@@ -101,95 +101,87 @@ install_cron() {
 }
 
 setup() {
-  clear 2>/dev/null || true
-  echo "=========================================="
-  echo "       Cloudflare DDNS 一键配置向导"
-  echo "=========================================="
+  # curl ... | bash 会占用 stdin，交互统一从终端读取。
+  if ! { exec 3</dev/tty; } 2>/dev/null; then
+    die "当前没有交互终端。请在 SSH 或终端窗口中运行安装命令。"
+  fi
+  local token='' verify zones count choice zone_id zone_name label host mode types_json
+  echo '=== Cloudflare DDNS 简易配置 ==='
+  echo '创建 Token：https://dash.cloudflare.com/profile/api-tokens'
+  echo '所需权限：Zone → Zone → Read、Zone → DNS → Edit'
   echo
-  echo "你只需要准备一个 Cloudflare API Token。"
-  echo "Token 权限：Zone / DNS / Edit + Zone / Zone / Read"
-  echo
-
-  local token verify zones count choice zone_id zone_name label host type_choice types_json proxy_choice proxied interval
-  while true; do
-    read -rsp "粘贴 API Token: " token; echo
-    [[ -n "$token" ]] || { echo "Token 不能为空。"; continue; }
+  local attempt
+  for attempt in 1 2 3; do
+    printf '请输入 API Token：' >&2
+    if ! IFS= read -rs -u 3 token; then
+      die '终端输入已结束，配置已退出'
+    fi
+    printf '\n' >&2
+    if [[ -z "$token" ]]; then
+      echo 'Token 不能为空。' >&2
+      continue
+    fi
     verify="$(api_with_token "$token" GET '/user/tokens/verify' 2>/dev/null || true)"
-    if [[ "$(jq -r '.success // false' <<<"$verify" 2>/dev/null || echo false)" == "true" && "$(jq -r '.result.status // empty' <<<"$verify" 2>/dev/null)" == "active" ]]; then
-      echo "✅ Token 有效"
+    if [[ "$(jq -r '.success // false' <<<"$verify" 2>/dev/null)" == true &&
+          "$(jq -r '.result.status // empty' <<<"$verify" 2>/dev/null)" == active ]]; then
       break
     fi
-    echo "❌ Token 无效，请重新复制。"
+    echo 'Token 验证失败，请检查 Token 或网络' >&2
+    token=''
   done
+  [[ -n "$token" ]] || die '验证失败次数过多，请重新运行'
 
-  zones="$(api_with_token "$token" GET '/zones?status=active&per_page=50&order=name&direction=asc' 2>/dev/null || true)"
-  cf_ok "$zones" "读取域名列表" || {
-    echo "请确认 Token 同时具有 Zone → Zone → Read 权限。"
-    exit 1
-  }
+  zones="$(api_with_token "$token" GET '/zones?status=active&per_page=50' 2>/dev/null || true)"
+  cf_ok "$zones" '读取域名列表' || die '请确认 Token 有 Zone Read 权限'
   count="$(jq '.result | length' <<<"$zones")"
-  (( count > 0 )) || die "这个 Token 看不到任何已激活的 Cloudflare Zone"
-
-  echo
-  echo "请选择要做 DDNS 的域名："
-  jq -r '.result | to_entries[] | "  \(.key+1)) \(.value.name)"' <<<"$zones"
-  while true; do
-    read -rp "输入序号: " choice
-    [[ "$choice" =~ ^[0-9]+$ ]] && ((choice >= 1 && choice <= count)) && break
-    echo "请输入 1~${count}。"
-  done
+  (( count > 0 )) || die '没有查询到域名，请检查 Token 的域名权限'
+  if (( count == 1 )); then
+    choice=1
+  else
+    echo '选择你的 Cloudflare 域名：'
+    jq -r '.result | to_entries[] | "  \(.key + 1)) \(.value.name)"' <<<"$zones"
+    printf '请输入序号：' >&2
+    IFS= read -r -u 3 choice || die '输入已结束，已退出'
+    [[ "$choice" =~ ^[0-9]+$ ]] && (( choice >= 1 && choice <= count )) || die '域名序号无效'
+  fi
   zone_id="$(jq -r ".result[$((choice-1))].id" <<<"$zones")"
   zone_name="$(jq -r ".result[$((choice-1))].name" <<<"$zones")"
+  echo "已选域名：$zone_name"
 
-  echo
-  read -rp "DDNS 主机名前缀 [默认 ddns；根域名填 @]: " label
+  printf '子域名前缀 [默认 ddns，根域名输入 @]：' >&2
+  IFS= read -r -u 3 label || die '输入已结束，已退出'
   label="${label:-ddns}"
-  if [[ "$label" == "@" ]]; then
+  if [[ "$label" == '@' ]]; then
     host="$zone_name"
-  elif [[ "$label" == *".$zone_name" ]]; then
-    host="$label"
+  elif [[ "$label" =~ ^[A-Za-z0-9-]+(\.[A-Za-z0-9-]+)*$ ]]; then
+    if [[ "$label" == *".$zone_name" ]]; then host="$label"; else host="$label.$zone_name"; fi
   else
-    host="${label}.${zone_name}"
+    die '子域名格式不正确'
   fi
 
-  echo
-  echo "IP 类型："
-  echo "  1) IPv4 / A     （推荐，默认）"
-  echo "  2) IPv6 / AAAA"
-  echo "  3) IPv4 + IPv6"
-  read -rp "请选择 [1]: " type_choice
-  type_choice="${type_choice:-1}"
-  case "$type_choice" in
+  echo 'IP 类型：1) IPv4（默认）  2) IPv6  3) 双栈'
+  printf '请选择 [1]：' >&2
+  IFS= read -r -u 3 mode || die '输入已结束，已退出'
+  case "${mode:-1}" in
     1) types_json='["A"]' ;;
     2) types_json='["AAAA"]' ;;
     3) types_json='["A","AAAA"]' ;;
-    *) echo "无效选择"; exit 1 ;;
+    *) die 'IP 类型无效' ;;
   esac
 
-  echo
-  read -rp "开启 Cloudflare 橙云代理？[y/N，SSH/远程访问建议 N]: " proxy_choice
-  [[ "$proxy_choice" =~ ^[Yy]$ ]] && proxied=true || proxied=false
-
-  echo
-  read -rp "每隔多少分钟检查 IP？[默认 ${DEFAULT_INTERVAL}]: " interval
-  interval="${interval:-$DEFAULT_INTERVAL}"
-  [[ "$interval" =~ ^[0-9]+$ ]] && ((interval >= 1 && interval <= 59)) || interval="$DEFAULT_INTERVAL"
-
-  save_config "$token" "$zone_id" "$zone_name" "$host" "$types_json" "$proxied" "$interval"
-  echo
-  echo "正在创建/同步 DNS 记录……"
-  update_all
-  install_cron || true
-
-  echo
-  echo "=========================================="
-  echo "✅ DDNS 配置完成"
-  echo "域名: $host"
-  echo "类型: $(jq -r '.types | join(" + ")' "$CONFIG_FILE")"
-  echo "间隔: ${interval} 分钟"
-  echo "配置: $CONFIG_FILE"
-  echo "日志: $LOG_FILE"
-  echo "=========================================="
+  # DNS only（灰云），每 5 分钟检查，省去其他设置。
+  save_config "$token" "$zone_id" "$zone_name" "$host" "$types_json" false 5
+  echo '正在同步 Cloudflare DNS ...'
+  if update_all; then
+    echo '✅ DNS 同步成功'
+  else
+    echo '⚠ DNS 尚未全部同步，请检查网络或 Token 权限' >&2
+  fi
+  if install_cron; then
+    echo "✅ 已完成：$host（灰云，每 5 分钟检查）"
+  else
+    echo '⚠ cron 未启用，安装 cron 后再运行一次配置' >&2
+  fi
 }
 
 upsert_record() {
@@ -276,7 +268,7 @@ menu() {
     echo "4) 查看完整日志"
     echo "0) 退出"
     echo "====================================="
-    read -rp "请选择: " c
+    read -rp "请选择: " c || exit 0
     case "$c" in
       1) update_all ;;
       2) status ;;
